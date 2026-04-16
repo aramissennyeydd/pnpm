@@ -206,7 +206,7 @@ export async function resolveDependencyTree<T> (
     workspacePackages: opts.workspacePackages,
     missingPeersOfChildrenByPkgId: {},
     hoistPeers: autoInstallPeers || opts.dedupePeerDependents,
-    allPeerDepNames: new Set(),
+    allPeerDepNames: getAllPeerDepNamesFromLockfile(opts.wantedLockfile),
     maximumPublishedBy: opts.minimumReleaseAge ? new Date(Date.now() - opts.minimumReleaseAge * 60 * 1000) : undefined,
     publishedByExclude: opts.minimumReleaseAgeExclude ? createPackageVersionPolicyByExclude(opts.minimumReleaseAgeExclude, 'minimumReleaseAgeExclude') : undefined,
     trustPolicy: opts.trustPolicy,
@@ -416,4 +416,22 @@ function dedupeSameAliasDirectDeps (directDeps: PkgAddressOrLink[], wantedDepend
     }
   }
   return Array.from(deps.values())
+}
+
+export function getAllPeerDepNamesFromLockfile (lockfile: LockfileObject): Set<string> {
+  const peerDepNames = new Set<string>()
+  if (lockfile.packages == null) return peerDepNames
+  for (const snapshot of Object.values(lockfile.packages)) {
+    if (snapshot.peerDependencies != null) {
+      for (const name of Object.keys(snapshot.peerDependencies)) {
+        peerDepNames.add(name)
+      }
+    }
+    if (snapshot.peerDependenciesMeta != null) {
+      for (const name of Object.keys(snapshot.peerDependenciesMeta)) {
+        peerDepNames.add(name)
+      }
+    }
+  }
+  return peerDepNames
 }

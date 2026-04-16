@@ -674,6 +674,149 @@ test('resolve peer dependencies with npm aliases', async () => {
   ])
 })
 
+test('incomplete allPeerDepNames produces different dep paths than complete set', async () => {
+  // When allPeerDepNames is incomplete (missing a peer dep name), that package
+  // is not tracked as a peer provider in pkgsByName. This changes the dep paths
+  // for packages that depend on it as a peer, producing lockfile churn.
+  //
+  // Setup: peer-x and peer-y are base peer providers. pkg-utils has peers on
+  // peer-x and peer-y. pkg-theme also has peers on peer-x and peer-y.
+  // pkg-wrapper has peers on pkg-theme, pkg-utils, peer-x, and peer-y.
+  //
+  // When pkg-utils is missing from allPeerDepNames, it is not tracked as a peer
+  // provider, so pkg-wrapper's dep path suffix changes.
+  const peerXPkg = {
+    name: 'peer-x',
+    pkgIdWithPatchHash: 'peer-x/1.0.0' as PkgIdWithPatchHash,
+    version: '1.0.0',
+    peerDependencies: {} as PeerDependencies,
+    id: '' as PkgResolutionId,
+  }
+  const peerYPkg = {
+    name: 'peer-y',
+    pkgIdWithPatchHash: 'peer-y/1.0.0' as PkgIdWithPatchHash,
+    version: '1.0.0',
+    peerDependencies: {
+      'peer-x': { version: '>=1' },
+    },
+    id: '' as PkgResolutionId,
+  }
+  const pkgUtilsPkg = {
+    name: 'pkg-utils',
+    pkgIdWithPatchHash: 'pkg-utils/1.0.0' as PkgIdWithPatchHash,
+    version: '1.0.0',
+    peerDependencies: {
+      'peer-x': { version: '>=1' },
+      'peer-y': { version: '>=1' },
+    },
+    id: '' as PkgResolutionId,
+  }
+  const pkgThemePkg = {
+    name: 'pkg-theme',
+    pkgIdWithPatchHash: 'pkg-theme/1.0.0' as PkgIdWithPatchHash,
+    version: '1.0.0',
+    peerDependencies: {
+      'peer-x': { version: '>=1' },
+      'peer-y': { version: '>=1' },
+    },
+    id: '' as PkgResolutionId,
+  }
+  const pkgWrapperPkg = {
+    name: 'pkg-wrapper',
+    pkgIdWithPatchHash: 'pkg-wrapper/1.0.0' as PkgIdWithPatchHash,
+    version: '1.0.0',
+    peerDependencies: {
+      'pkg-theme': { version: '>=1' },
+      'pkg-utils': { version: '>=1' },
+      'peer-x': { version: '>=1' },
+      'peer-y': { version: '>=1' },
+    },
+    id: '' as PkgResolutionId,
+  }
+
+  const projects = [
+    {
+      directNodeIdsByAlias: new Map([
+        ['peer-x', '>peer-x/1.0.0>' as NodeId],
+        ['peer-y', '>peer-y/1.0.0>' as NodeId],
+        ['pkg-utils', '>pkg-utils/1.0.0>' as NodeId],
+        ['pkg-theme', '>pkg-theme/1.0.0>' as NodeId],
+        ['pkg-wrapper', '>pkg-wrapper/1.0.0>' as NodeId],
+      ]),
+      topParents: [],
+      rootDir: '' as ProjectRootDir,
+      id: '',
+    },
+  ]
+  const dependenciesTree = new Map<NodeId, DependenciesTreeNode<PartialResolvedPackage>>([
+    ['>peer-x/1.0.0>' as NodeId, {
+      children: {},
+      installable: true,
+      resolvedPackage: peerXPkg,
+      depth: 0,
+    }],
+    ['>peer-y/1.0.0>' as NodeId, {
+      children: {},
+      installable: true,
+      resolvedPackage: peerYPkg,
+      depth: 0,
+    }],
+    ['>pkg-utils/1.0.0>' as NodeId, {
+      children: {},
+      installable: true,
+      resolvedPackage: pkgUtilsPkg,
+      depth: 0,
+    }],
+    ['>pkg-theme/1.0.0>' as NodeId, {
+      children: {},
+      installable: true,
+      resolvedPackage: pkgThemePkg,
+      depth: 0,
+    }],
+    ['>pkg-wrapper/1.0.0>' as NodeId, {
+      children: {},
+      installable: true,
+      resolvedPackage: pkgWrapperPkg,
+      depth: 0,
+    }],
+  ])
+  const commonOpts = {
+    projects,
+    resolvedImporters: {},
+    dependenciesTree,
+    virtualStoreDir: '',
+    virtualStoreDirMaxLength: 120,
+    lockfileDir: '',
+    peersSuffixMaxLength: 1000,
+    workspaceProjectIds: new Set<string>(),
+  }
+
+  // Complete allPeerDepNames (as the fix provides by seeding from lockfile)
+  const completeResult = await resolvePeers({
+    ...commonOpts,
+    allPeerDepNames: new Set(['peer-x', 'peer-y', 'pkg-utils', 'pkg-theme', 'pkg-wrapper']),
+  })
+
+  // Incomplete allPeerDepNames (missing 'pkg-utils' — as happens without the
+  // fix when pkg-utils' resolution is skipped on incremental install)
+  const incompleteResult = await resolvePeers({
+    ...commonOpts,
+    allPeerDepNames: new Set(['peer-x', 'peer-y', 'pkg-theme', 'pkg-wrapper']),
+  })
+
+  const completeKeys = Object.keys(completeResult.dependenciesGraph).sort()
+  const incompleteKeys = Object.keys(incompleteResult.dependenciesGraph).sort()
+  expect(completeKeys).not.toStrictEqual(incompleteKeys)
+
+  // With complete set, pkg-wrapper's suffix includes pkg-utils
+  const wrapperComplete = completeKeys.find(k => k.startsWith('pkg-wrapper/'))!
+  expect(wrapperComplete).toContain('pkg-utils')
+
+  // With incomplete set, pkg-utils is absent from the suffix
+  const wrapperIncomplete = incompleteKeys.find(k => k.startsWith('pkg-wrapper/'))!
+  expect(wrapperIncomplete).not.toContain('pkg-utils')
+})
+
 describe('dedupePeers', () => {
   test('uses version-only peer suffixes without nested dep paths', async () => {
     // Simulates: react@18, @emotion/react@11(peer: react), @emotion/styled@11(peer: react, @emotion/react)
